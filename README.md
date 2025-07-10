@@ -161,7 +161,7 @@ Layer 4 continues the pattern of the previous layer, where the assigner attends 
 
 For the most part, elements in layer 5 attend to themselves or tokens within the same operation. However, as the recursive depth of the variable chains increase, some tokens form long-range connections to other tokens in the same assignment sequence. Because displaying the entire 600x600 attention map is too memory-intensive for the browser, I have included the final 400-550 tokens below.
 
-[Layer 5 Attention Maps Last 200 Tokens](assets/l5_attn_map_last_200.html)
+[Layer 5 Attention Maps 400-550 Tokens](assets/l5_attn_map_400_550.html)
 
 
 ## LLMs Cheat with CoT
