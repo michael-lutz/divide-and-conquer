@@ -1,4 +1,8 @@
-# Transformer Depth Unlocks $2^n$ Effective Context Size with Divide and Conquer
+---
+title: Transformer Depth Unlocks $2^n$ Effective Context Size with Divide and Conquer
+author: Michael Lutz
+date: July 10, 2025
+---
 When discussing bottlenecks in transformer context size, we typically focus on position embeddings, the quadratic complexity of attention, and memory constraints. But there's a subtler, equally important limitation hidden in plain sight: the depth of recursive reasoning.
 
 Let's start with a fun brain teaser. In the codebase below, a segfault occurs downstream of function `f1035()`. Which function caused the bug?
