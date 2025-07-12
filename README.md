@@ -1,7 +1,8 @@
 ---
 title: Transformer Depth Unlocks 2^n Effective Context Size with Divide and Conquer
 author: Michael Lutz
-date: July 10, 2025
+date: July 12, 2025
+github: https://github.com/michael-lutz/divide-and-conquer
 ---
 When discussing bottlenecks in transformer context size, we typically focus on position embeddings, the quadratic complexity of attention, and memory constraints. But there's a subtler, equally important limitation hidden in plain sight: the depth of recursive reasoning.
 
@@ -34,7 +35,7 @@ e=b
 
 Patching the residual stream, they found that information flows from one token to another with each layer, iteratively resolving the dependencies one layer at a time. In the first few layers, the token `b` might store "b is 2" in its activation, and in the next layer, the token `e` might attend to `b` and store "e is 2" in its activation, and so on. Another cool paper by [Prakash et al.](https://arxiv.org/abs/2505.14685) describes a "lookback mechanism" in which information flows across dependencies from earlier to later layers.
 
-This all had me wondering: what is the relationship between the number of layers and the *maximum* number of dependencies a token can encode? At first glance the relationship seems linear, as each layer allows the query token to reach a subsequent dependency. As complexity of the prompt increases, the effective context size shrinks linearly. On complex codebases or long novels, this result would be especially concerning for modern LLMs, which only have layer depths on the order of 60-120 (insert your favorite reddit leak here).
+This all had me wondering: what is the relationship between the number of layers and the *maximum* number of dependencies a token can encode in a forward pass? At first glance the relationship seems linear, as each layer allows the query token to reach a subsequent dependency. As complexity of the prompt increases, the effective context size shrinks linearly. On complex codebases or long novels, this result would be especially concerning, as modern LLMs only have layer depths on the order of 60-120 (insert your favorite reddit leak here).
 
 But what if the transformer learns to *divide and conquer*? If each token resolves its own dependencies in parallel, then it might be possible to achieve exponential effective context size with respect to layer depth. In this post, I show that this is indeed the case:
 1. With the right formulation, transformers can resolve on the order of $2^n$ dependencies for $n$ stacked attention layers.
@@ -168,25 +169,24 @@ For the most part, elements in layer 5 attend to themselves or tokens within the
 [Layer 5 Attention Maps 400-550 Tokens](assets/l5_attn_map_400_550.html)
 
 
-## LLMs Cheat with CoT
-If a simple transformer can resolve an exponential number of dependencies with layer depth, LLMs with 100s of layers should be able to resolve an effectively infinite number of dependencies, right?
+## LLMs are Surprisingly Limited
+If a simple transformer can resolve an exponential number of dependencies with layer depth, LLMs with 100s of layers should be able to resolve an effectively infinite number of dependencies, right? After all, a 120-layer model should be able to perform close to $2^{120} = 1.3 \times 10^{36}$ hops.
 
-Try pasting the prompt from [above](#attention-maps) into a chatbot like Claude or ChatGPT, and it will likely try to solve the problem by evoking a code intepreter or by manually resolving one token at a time by chain of thought reasoning. After all, chain of thought reasoning allows the model to resolve token relationships by caching the most recent evaluation and performing a shallow lookback to its parent. If you ask a model to directly evaluate a high-depth variable chain, it will almost surely fail at high depths.
+Try pasting the prompt from [above](#attention-maps) into a chatbot like Claude or ChatGPT, and it will likely try to solve the problem by evoking a code intepreter or by manually resolving relationships one token at a time through chain of thought reasoning. Chain of thought allows the model to cache the most recent evaluation and perform a shallow lookback to its parent. For example, if the prompt is `a>b;b>c;`, the model can generate "c is b" and use the `b` token to subsequently generate "b is a"—all while performing only one hop per generated token.
 
-In fact, try plugging this very simple prompt into your favorite chatbot:
+The question remains: how many hops can an LLM perform per *token generation*? Try plugging this prompt (which is the first 25% of the prompt from [above](#attention-maps)) into your favorite chatbot and running it a few times. Note that instructing the model to provide the answer first should dissuade the model from solving the problem sequentially through chain of thought.
 ```
 The a>b operator means b=a, or b resolves to a. Assume the operations are evaluated by an interpreter in this exact order.
 
-2>l;0>c;1>f;3>p;c>u;u>s;s>n;p>w;l>o;o>e;n>u;f>k;u>n;e>l;w>c;k>x;c>v;n>g;
+2>l;0>c;1>f;3>p;c>u;u>s;s>n;p>w;l>o;o>e;n>u;f>k;u>n;e>l;w>c;k>x;c>v;n>g;x>d;g>s;l>b;s>l;l>r;r>t;v>k;b>n;k>p;p>u;d>y;y>i;t>k;n>x;x>b;b>v;u>m;m>s;v>h;s>p;i>y;h>d;k>q;y>c;
 
-What number does g evaluate to? Give your answer first and then why.
+After execution, what number does c evaluate to? Give your answer first and then why.
 ```
-When I tried this (as of July 10th, 2025), both Claude and GPT-4o cycled between 1 and 2, failing to provide the correct answer of 0.
+When I tried this (as of July 11th, 2025), both Claude and GPT-4o cycled between 0 and 2, failing to provide the correct answer of 1. The correct path: `1>f>k>x>d>y>i>y>c` only requires 8 hops, and our 5-layer breezed through this question with ease!
 
-But sure... this type of prompt likely wasn't in the training data of either model, so let's try something that will appear more familiar despite resolving to the same variable evaluation task. It's important to note that the instruction must be provided before the context, otherwise the model would be unable to resolve the problem in parallel.
-
+But sure... this type of prompt likely wasn't in the training data of either model, so let's try something that will appear more familiar. 
 ```
-In the codebase below, a bug. I know f11164() gets called. Which function caused the bug? Provide your answer and then why.
+In the codebase below, a bug occurs. I know f11164() gets called. Which function caused the bug? Provide your answer and then why.
 
 def f14698():
     raise RuntimeError('Unknown error occurred')
@@ -272,17 +272,28 @@ def f13086():
 
 The answer is `f18424` after 9 hops, but GPT-4o insisted accross multiple calls that the answer was `f14698`.
 
-Despite having the theoretical ability to understand exponentially many dependencies in prompt token activations, modern LLMs do not seem to explot this capability. My hypothesis is that most model pretraining data actually dos not require the model to truly understand a large number of dependencies per token. Instead, a model likely reaches a local optimum of the next-token objective by learning to perform shallow lookbacks. During post-training, a model learns to perform chain of thought reasoning to resolve large numbers of dependencies, skirting the need to actually understand a large number of dependencies while processing the context. While this may saturate post-training objectives, it notably prevents a model from truly forming long-range connections—a capability that *should* be learnable.
+## Why This Matters
+Despite having the theoretical ability to understand exponentially many dependencies per token generation, modern LLMs do not learn to exploit this mechanism. I hypothesize that most human-generated pretraining data and reasoning traces primarily involve shallow lookbacks, and thus LLMs never need to learn the divide and conquer circuit. Each token generation may only require a single digit lookback depth, and that saturates most pre-training and post-training objectives.
 
-## Conclusion
-If we are to ever reach model intelligence that greatly surpasses human ability, understanding complex information dependencies seems natural and necessary. While chain of thought reasoning allows a model to resolve dependencies in token-space, the fact remains that *you don't know what you don't know*, and it is easy to miss important connections that are not obvious within a few hops. Moreover, problems that require searching through a dependency *graph* (e.g. functions may call multiple functions) is simply intractable via chain of thought.
+**But why train models to think like humans, bound by shallow hops, when they could grasp entire dependency graphs at once?**
 
+It's easy to see how precisely encoding *all* of a text's dependencies at the time of generation would allow a model to form deep connections that would otherwise be impossible to see. If we are to develop machines that greatly exceed human reasoning abilities, teaching them to understand complex information dependencies seems natural and necessary. The fact remains that *you don't know what you don't know*, and it is easy to miss important connections that are not obvious within a few hops.
+
+Moreover, most information dependencies are not structured in linear chains, but rather graphs. If you've ever asked a model to debug a deadlock in a complicated code base, you'll know that LLMs struggle to understand the delicate ordering of code and high branching factor of potential culprit code paths. Chain of thought reasoning through every suspicious path is intractable due to the exponential growth of tokens required.
+
+## Follow Up Ideas
 I don't have access to a large distributed learning setup, but if I did, I'd start by adding a pretraining objective that requires a model to resolve a large number of dependencies per token. To avoid disrupting the natural abstraction of information, it might be worth warm-starting this circuit by freezing most heads and weight-sharing a head from the third layer and onwards to enforce a recursive divide and conquer mechanism. Another subtle detail is that the question must be provided before the context, otherwise the model would be unable to resolve the problem in parallel.
 
-An interesting follow-up direction is to explore the ability of small models to perform search through graph-like dependency relationships. Moreover, weight sharing the divide and conquer mechanism seems like a natural way to allow *infinite* dependency resolution.
+An interesting follow-up direction is to explore the ability of small models to perform search through graph-like dependency relationships. My intuition is that . Moreover, it could also be helpful to figure out how to effectively weight-share .
+
+Thanks for reading! If you have any feedback or ideas, feel free to make an issue or PR on the [project repo](https://github.com/michael-lutz/divide-and-conquer). I have provided all model configurations & checkpoints and encourage you to perform your own analysis.
+
+P.S. I'm always looking for collaborators to work on open-source projects. Reach out to me [on X](https://x.com/Michael_J_Lutz)!
 
 
 ## Acknowledgements
+
+I'd like to thank Nathan Gong for the consistent feedback as I worked on this project. I'd also like to thank Michael Equi for graciously taking the time to review this blog.
 
 ## Appendix
 
@@ -302,12 +313,20 @@ The results show a clear pattern of head specialization across layers:
 
 Several interesting patterns emerge from this analysis:
 
-**Layer 1**: Both heads show similar importance (23.67% vs 24.67%), suggesting they work together to establish the initial self-attention patterns for variable lookups. This layer likely handles the basic token-to-token relationships that form the foundation for subsequent processing.
+- **Layer 1**: Both heads show similar importance (23.67% vs 24.67%), suggesting they work together to establish the initial self-attention patterns for variable lookups. This layer likely handles the basic token-to-token relationships that form the foundation for subsequent processing.
 
-**Layer 2**: Head 1 is significantly more important (51.00% vs 20.33%), indicating it plays a crucial role in establishing the positional relationships between assigners and assignees. This aligns with the attention map observations where head 1 showed more information-dense patterns.
+- **Layer 2**: Head 1 is significantly more important (51.00% vs 20.33%), indicating it plays a crucial role in establishing the positional relationships between assigners and assignees. This aligns with the attention map observations where head 1 showed more information-dense patterns.
 
-**Layer 3**: Head 1 remains dominant (59.00% vs 34.00%), continuing its role in resolving direct parent-child relationships in the variable chains. The continued importance of head 1 suggests it maintains responsibility for the core dependency resolution mechanism.
+- **Layer 3**: Head 1 remains dominant (59.00% vs 34.00%), continuing its role in resolving direct parent-child relationships in the variable chains. The continued importance of head 1 suggests it maintains responsibility for the core dependency resolution mechanism.
 
-**Layer 4**: Head 0 is dramatically more important (87.67% vs 30.00%), suggesting it takes over the primary role in propagating resolved values through the dependency chains. This represents a shift in computational responsibility as the model moves to higher-level reasoning.
+- **Layer 4**: Head 0 is dramatically more important (87.67% vs 30.00%), suggesting it takes over the primary role in propagating resolved values through the dependency chains. This represents a shift in computational responsibility as the model moves to higher-level reasoning.
 
-**Layer 5**: Head 1 is the most important (87.00% vs 51.00%), likely handling the final resolution of complex multi-hop dependencies. The return to head 1 suggests it specializes in the most sophisticated aspects of the divide-and-conquer mechanism.
+- **Layer 5**: Head 1 is the most important (87.00% vs 51.00%), likely handling the final resolution of complex multi-hop dependencies. The return to head 1 suggests it specializes in the most sophisticated aspects of the divide-and-conquer mechanism.
+
+### Token Embeddings
+I thought it might be interesting to examine how token embeddings were structured by the end of training. The following dot product and cosine similarity heatmaps are generated from the same 5 layer 2 head model from before.
+
+![Token Embedding Dot Products](assets/token_emb_dp.jpg)
+![Token Embedding Cosine Similarity](assets/token_emb_sim.jpg)
+
+We can see that numbesr 1-4 (only numbers in the dataset), `;`, and `>` have the highest magnitudes, leading to the lattice pattern observed in the first layer. Additionally, we can see that letters are somewhat close to each other (cosine similarity ~.3) in the embedded space.
