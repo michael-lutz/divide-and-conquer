@@ -1,5 +1,5 @@
 ---
-title: Transformer Depth Unlocks 2^n Effective Context Size with Divide and Conquer
+title: Transformer Depth Unlocks $\Omega(2^n)$ Effective Context Size with Divide and Conquer
 author: Michael Lutz
 date: July 12, 2025
 github: https://github.com/michael-lutz/divide-and-conquer
