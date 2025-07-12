@@ -30,15 +30,15 @@ b=2
 c=a
 d=c
 e=b
-...
+e?
 ```
 
-Patching the residual stream, they found that information flows from one token to another with each layer, iteratively resolving the dependencies one layer at a time. In the first few layers, the token `b` might store "b is 2" in its activation, and in the next layer, the token `e` might attend to `b` and store "e is 2" in its activation, and so on. Another cool paper by [Prakash et al.](https://arxiv.org/abs/2505.14685) describes a "lookback mechanism" in which information flows across dependencies from earlier to later layers.
+Patching the residual stream, they found that information flows from one token to another with each layer, iteratively resolving references to other tokens one layer at a time. In the first few layers, the token `e` might store "e is b" in its activation, and in the next layer, the token `e` might attend to the first `b` and store "e is 2," and so on. Another cool paper by [Prakash et al.](https://arxiv.org/abs/2505.14685) describes a "lookback mechanism" that resembles C pointer dereferencing, in which information flows across references from earlier to later layers.
 
-This all had me wondering: what is the relationship between the number of layers and the *maximum* number of dependencies a token can encode in a forward pass? At first glance the relationship seems linear, as each layer allows the query token to reach a subsequent dependency. As complexity of the prompt increases, the effective context size shrinks linearly. On complex codebases or long novels, this result would be especially concerning, as modern LLMs only have layer depths on the order of 60-120 (insert your favorite reddit leak here).
+This all had me wondering: what is the relationship between the number of layers and the *maximum* number of linked references a token can encode in a forward pass? At first glance the relationship seems linear, as each layer allows the query token to reach a subsequent information dependency. On complex codebases or long novels, this result would be especially concerning, as modern LLMs only have layer depths on the order of 60-120 (insert your favorite reddit leak here).
 
 But what if the transformer learns to *divide and conquer*? If each token resolves its own dependencies in parallel, then it might be possible to achieve exponential effective context size with respect to layer depth. In this post, I show that this is indeed the case:
-1. With the right formulation, transformers can resolve on the order of $2^n$ dependencies for $n$ stacked attention layers.
+1. With the right formulation, transformers can resolve on the order of $2^n$ token dependencies for $n$ stacked attention layers.
 2. Modern LLMs do not exhibit this exponential behavior and instead rely on tool use or chain of thought reasoning to resolve dependencies sequentially.
 
 ## Variable Evaluation Experiment
@@ -47,9 +47,9 @@ I generated a variable evaluation dataset with an updated objective, trained mod
 
 ### Task Design
 I made some changes to the original variable binding task to simplify learning and improve interpretability:
-- The task requires the model to evaluate `a>b` instead of `b=a` to improve interpretability of the attention maps, as it allows variable `b` to directly attend to `a` during evaluation. In this sense, `a` is the assigner and `b` is the assignee.
-- Each example consists of variable renaming chains like `1>a;2>b;a>c;b>d;d>e;`, where the model must predict the original numeric value at each variable token, improving sample efficiency.
+- The task requires the model to evaluate `a>b` instead of `b=a` to improve interpretability of the attention maps, as it allows variable `b` to directly attend to `a` during evaluation. As such, `a` is the assigner and `b` is the assignee.
 - Variables (sampled from a-z) may be reused by another chain once they are reassigned.
+- Models are not trained under a next-token prediction objective. Instead, the model must predict the original numeric evaluation at each variable token, improving sample efficiency. Model predictions are masked at `;` and `>` tokens for simplicity.
 - Accuracy is tracked and reported with respect to dependency depth (0-hops, 1-hop, 2-hops, etc.)
 
 ```
@@ -59,7 +59,7 @@ Predicted: 2.2.0.0.1.1.3.3.0.0.0.0.0.0.3.3.2.2.2.2.0.0.2.2.
 Correct:   ✔.✔.✔.✔.✔.✔.✔.✔.✔.✔.✔.✔.✔.✔.✔.✔.✔.✔.✔.✔.✔.✔.✘.✘.
 ```
 
-Above, I included an example prompt, the correct answers, example predictions, and whether those predictions were correct. I don't want to bore you with the details, but feel free to read through the prompt generation code below:
+Above, I included an example prompt, the correct answers, example predictions, and whether those predictions were correct. I don't want to bombard you with the details, but feel free to read through the prompt generation code below:
 
 [VariableRenamingPrompter](train.py#VariableRenamingPrompter)
 
@@ -67,7 +67,7 @@ Above, I included an example prompt, the correct answers, example predictions, a
 I use a pre-LayerNorm transformer with RoPE positional embeddings, testing configurations from 2-5 layers and 1-2 heads. The vocabulary size is 39 tokens (digits 0-9, letters a-z, symbols `>`, `;`, `.`). I found through early experiments that using RoPE, as opposed to absolute positional embeddings, is crucial for the model to generalize across different chain lengths because it forces each token to perform the same variable lookup operation regardless of its position in the sequence.
 
 ### Experimental Parameters
-- Training: 1M examples with 150 renames sampled from 4 chains, 10K test examples. It's worth noting that more chains force the model to generalize and not learn shortcut heuristics.
+- Training: 1M examples with 150 renames sampled from 4 chains, 10K test examples. It's worth noting that more chains force the model to generalize and not cheat with heuristics.
 - Batch size: 128, Learning rate: 1e-4 with 4K warmup steps
 - Hyperparameter sweep: 8 configurations testing layer depth (2,3,4,5) × attention heads (1,2)
 
@@ -95,7 +95,7 @@ However, what is more interesting is how model performance per depth changes wit
 
 For the data with two heads, we can clearly observe an exponential relationship between the number of layers and the performance per chain depth. The two-layer model regresses from perfect accuracy at 2 hops to baseline at 8 hops, the three-layer model drops in performance from 4 to 13 hops, the four-layer model declines from perhaps 10 to 29 hops, and the five-layer model begins to decline perhaps in the low 20s.
 
-Generally, the one head experiments converged much slower or, in the case of the five layer 1 head experiment, have not yet converged. Moreover, it is worth noting that the three layers 1 head regressed heavily at 684 steps, likely due to instability caused. I hypothesize why this is the case [here](#head-patching).
+Generally, the one head experiments converged much slower or, in the case of the five layer 1 head experiment, have not yet converged. Moreover, it is worth noting that the three layers 1 head regressed heavily at 684 steps. An attention head patching analysis reveals that both heads are heavily utilized in the first layer (see [here](#head-patching)).
 
 ## Divide and Conquer Circuit
 So how does this tiny transformer achieve exponentially improving performance with respect to the number of layers? The key is that the model learns a divide and conquer copy circuit, where *every* token resolves an independent dependency in parallel, as opposed to only the query token at the end.
@@ -124,7 +124,7 @@ Right:
 ```
 
 #### Layer 1 Attention Maps
-These attention maps are interactive! As per standard, tokens along the y axis attend to tokens along the x axis. Black squares are where the normalized attention probability gets too small to matter. You may explore the attention maps of both heads by scrolling left and right. You may also select a region you'd like to magnify and double click to return to the original zoom. For memory reasons, I have only included the first 100 tokens of each head.
+**These attention maps are interactive!** As per standard, tokens along the y axis attend to tokens along the x axis. Black squares are where the normalized attention probability gets too small to matter. You may explore the attention maps of both heads by **scrolling** left and right. You may also drag and **select** a region you'd like to magnify and double click to return to the original zoom. For memory reasons, I have only included the first 100 tokens of each head.
 
 [Layer 1 Attention Maps](assets/l1_attn_map.html)
 
@@ -150,7 +150,7 @@ However, there are some fascinating exceptions. For instance, examine the sequen
 
 Let's start in head 2 and inspect the direct numerical assignments (e.g. `1>f`). Recall that in layer 2, the `1`, `>`, and `f` tokens all attend to `2`. Now, these tokens attend to themselves and other members of the operation. In other words, they have been fully resolved in layer 2 and are simply preserving the information they previously stored.
 
-Now let's look at the `c>u;` operation. In layer 2, we saw that the first `c` attended directly to 0 whereas the following `>` and `u` tokens only attended to `c`. In layer 3, `c` attends to itself because it has already resolved into a number, while `>` and `u` now attend to `0`. From here on out, we can observe a similar pattern across layers: the assigner resolves itself by attending to its parent (typically the assigner) and taking on the parent's *current* value. In the following layer, the assignee resolves itself to the parent's value by attending to the parent assigner or the parent assignee. When a variable has resolved into a number, it attends primarily to itself.
+Now let's look at the `c>u;` operation. In layer 2, we saw that the first `c` attended directly to 0 whereas the following `>` and `u` tokens only attended to `c`. In layer 3, `c` attends to itself because it has already resolved into a number, while `>` and `u` now attend to `0`. From here on out, we can observe a similar pattern across layers: the assigner resolves itself by attending to its parent (typically the assigner) and taking on the parent's *current* value. In the following layer, the assignee resolves itself to the parent's value by attending to the assigner. When a variable has resolved into a number, it attends primarily to itself.
 
 An interesting aspect of layer 3 is that both heads appear to be information dense. However, it is worth noting that the second layer turns out to be slightly more important than the first on this prompt, as patching the second head results in an accuracy of 34% whereas patching the first head results in an accuracy of 59% (see [here](#head-patching)).
 
@@ -164,7 +164,7 @@ Layer 4 continues the pattern of the previous layer, where the assigner attends 
 
 [Layer 5 Attention Maps](assets/l5_attn_map.html)
 
-For the most part, elements in layer 5 attend to themselves or tokens within the same operation. However, as the recursive depth of the variable chains increase, some tokens form long-range connections to other tokens in the same assignment sequence.
+For the most part, elements in layer 5 attend to themselves or tokens within the same operation. However, as the recursive depth of the variable chains increase, some tokens form long-range connections to other tokens in the same assignment sequence. I recommend playing around with the notebook included in the [project repo](https://github.com/michael-lutz/divide-and-conquer) to see how the attention maps change as the number of layers increases.
 
 
 ## LLMs Have Low Context Depth
