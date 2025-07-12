@@ -64,10 +64,10 @@ Above, I included an example prompt, the correct answers, example predictions, a
 [VariableRenamingPrompter](train.py#VariableRenamingPrompter)
 
 ### Model Architecture
-I use a pre-LayerNorm transformer with RoPE positional embeddings, testing configurations from 2-5 layers and 1-2 heads. The vocabulary size is 39 tokens (digits 0-9, letters a-z, symbols `>`, `;`, `.`). I found through early experiments that using RoPE, as opposed to absolute positional embeddings, is crucial for the model to generalize across different chain lengths.
+I use a pre-LayerNorm transformer with RoPE positional embeddings, testing configurations from 2-5 layers and 1-2 heads. The vocabulary size is 39 tokens (digits 0-9, letters a-z, symbols `>`, `;`, `.`). I found through early experiments that using RoPE, as opposed to absolute positional embeddings, is crucial for the model to generalize across different chain lengths because it forces each token to perform the same variable lookup operation regardless of its position in the sequence.
 
 ### Experimental Parameters
-- Training: 1M examples with 150 renames sampled from 4 chains, 10K test examples. *I should mention that increasing the number of chains to 4 (from 2) resulted in much better generalization for reasons that will become clear later.*
+- Training: 1M examples with 150 renames sampled from 4 chains, 10K test examples. It's worth noting that more chains force the model to generalize and not learn shortcut heuristics.
 - Batch size: 128, Learning rate: 1e-4 with 4K warmup steps
 - Hyperparameter sweep: 8 configurations testing layer depth (2,3,4,5) × attention heads (1,2)
 
@@ -330,3 +330,24 @@ I thought it might be interesting to examine how token embeddings were structure
 ![Token Embedding Cosine Similarity](assets/token_emb_sim.jpg)
 
 We can see that numbesr 1-4 (only numbers in the dataset), `;`, and `>` have the highest magnitudes, leading to the lattice pattern observed in the first layer. Additionally, we can see that letters are somewhat close to each other (cosine similarity ~.3) in the embedded space.
+
+### Theoretical Foundation
+
+This section provides a formal proof of why transformers can achieve exponential dependency resolution capacity with respect to layer depth.
+
+#### Exponential Capacity Theorem
+
+> **Theorem**: With $n$ attention layers, a transformer can resolve dependencies on the order of $2^{n-2}$ in a single forward pass.
+>
+>**Base case** ($n = 2$): A 2-layer model can resolve 1-hop dependencies by directly attending to immediate predecessors.
+>
+>**Inductive step**: Assume an $n$-layer model can resolve dependencies up to depth $2^{n-3}$. An $(n+1)$-layer model can then:
+>1. Use the first $n$ layers to resolve dependencies up to depth $2^{n-3}$
+>2. Use the final layer to combine this information and resolve dependencies up to depth $2^{n-2}$
+>
+>This works because each token in layer $n+1$ can attend to all previous tokens, including those that have already resolved their dependencies in the first $n$ layers.
+>
+>**Formally**: If token $v$ has a dependency path of length $d \leq 2^{n-2}$ to some source $s$, then in layer $n+1$:
+>- $v$ has already resolved its dependencies up to depth $2^{n-3}$ by the inductive hypothesis
+>- $v$ can attend to a token $u$ that has already resolved its dependencies up to depth $2^{n-3}$
+>- The attention mechanism can combine the information from $v$ and $u$ to resolve the full path of depth up to $2^{n-2}$
