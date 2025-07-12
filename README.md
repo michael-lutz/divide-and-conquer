@@ -1,10 +1,10 @@
 ---
-title: Transformer Depth Unlocks $\Omega(2^n)$ Effective Context Size with Divide and Conquer
+title: More Layers Unlock $2^n$ Transformer Context Depth with Divide and Conquer
 author: Michael Lutz
 date: July 12, 2025
 github: https://github.com/michael-lutz/divide-and-conquer
 ---
-When discussing bottlenecks in transformer context size, we typically focus on position embeddings, the quadratic complexity of attention, and memory constraints. But there's a subtler, equally important limitation hidden in plain sight: the depth of recursive reasoning.
+When discussing bottlenecks in transformer context size, we typically focus on position embeddings, the quadratic complexity of attention, and memory constraints. But there's a subtler, equally important limitation hidden in plain sight: context depth.
 
 Let's start with a fun brain teaser. In the codebase below, a segfault occurs downstream of function `f1035()`. Which function caused the bug?
 ```python
@@ -20,7 +20,7 @@ def f1035(): f1031()
 def f1081(): f1014()
 ```
 
-If you said `f1086()`, you're correct! But how did you do it? Chances are, you either tracked evaluations as you read from top to bottom or followed the code path from the bottom up. The key is that it's impossible to know `f1086()` matters until you know `f1017()` matters, and so on. To access relevant sources of truth in code, novels, legal documents, or even X feeds, humans (or networks) must efficiently recall what depends on what. While it is true that a token in a decoder-only attention layer *can* attend to any prior token, it's unlikely that it will attend to the correct piece of information in one go.
+If you said `f1086()`, you're correct! But how did you do it? Chances are, you either tracked evaluations as you read from top to bottom or followed the code path from the bottom up. The key is that it's impossible to know `f1086()` matters until you know `f1017()` matters, and so on. To access relevant sources of truth in code, novels, legal documents, or even X feeds, humans (or networks) must understand what depends on what. While it is true that a token in a decoder-only attention layer *can* attend to any prior token, it's unlikely that it will attend to the correct piece of information in one go. The depth of relationships a token can trace limits the complexity of reasoning it can perform.
 
 Much of this work is inspired by the [Variable Scope](https://variablescope.org/) project, in which Wu, Geiger, and Millière investigated the following variable evaluation task:
 
@@ -124,7 +124,7 @@ Right:
 ```
 
 #### Layer 1 Attention Maps
-As per standard, tokens along the y axis attend to tokens along the x axis. Black squares are where the normalized attention probability gets too small to matter. You may explore the attention maps of both heads by scrolling left and right. You may also select a region you'd like to magnify and double click to return to the original zoom. For memory reasons, I have only included the first 150 tokens of each head.
+These attention maps are interactive! As per standard, tokens along the y axis attend to tokens along the x axis. Black squares are where the normalized attention probability gets too small to matter. You may explore the attention maps of both heads by scrolling left and right. You may also select a region you'd like to magnify and double click to return to the original zoom. For memory reasons, I have only included the first 100 tokens of each head.
 
 [Layer 1 Attention Maps](assets/l1_attn_map.html)
 
@@ -164,12 +164,10 @@ Layer 4 continues the pattern of the previous layer, where the assigner attends 
 
 [Layer 5 Attention Maps](assets/l5_attn_map.html)
 
-For the most part, elements in layer 5 attend to themselves or tokens within the same operation. However, as the recursive depth of the variable chains increase, some tokens form long-range connections to other tokens in the same assignment sequence. Because displaying the entire 600x600 attention map is too memory-intensive for the browser, I have included the final 400-550 tokens below.
-
-[Layer 5 Attention Maps 400-550 Tokens](assets/l5_attn_map_400_550.html)
+For the most part, elements in layer 5 attend to themselves or tokens within the same operation. However, as the recursive depth of the variable chains increase, some tokens form long-range connections to other tokens in the same assignment sequence.
 
 
-## LLMs are Surprisingly Limited
+## LLMs Have Low Context Depth
 If a simple transformer can resolve an exponential number of dependencies with layer depth, LLMs with 100s of layers should be able to resolve an effectively infinite number of dependencies, right? After all, a 120-layer model should be able to perform close to $2^{120} = 1.3 \times 10^{36}$ hops.
 
 Try pasting the prompt from [above](#attention-maps) into a chatbot like Claude or ChatGPT, and it will likely try to solve the problem by evoking a code interpreter or by manually resolving relationships one token at a time through chain of thought reasoning. Chain of thought allows the model to cache the most recent evaluation and perform a shallow lookback to its parent. For example, if the prompt is `a>b;b>c;`, the model can generate "c is b" and use the `b` token to subsequently generate "b is a"—all while performing only one hop per generated token.
@@ -275,16 +273,16 @@ The answer is `f18424` after 9 hops, but GPT-4o insisted across multiple calls t
 ## Why This Matters
 Despite having the theoretical ability to understand exponentially many dependencies per token generation, modern LLMs do not learn to exploit this mechanism. I hypothesize that most human-generated pretraining data and reasoning traces primarily involve shallow lookbacks, and thus LLMs never need to learn the divide and conquer circuit. Each token generation may only require a single digit lookback depth, and that saturates most pre-training and post-training objectives.
 
-**But why train models to think like humans, bound by shallow hops, when they could grasp entire dependency graphs at once?**
+**But why train models to think like humans, bound by shallow hops, when they can learn to grasp entire dependency graphs?**
 
-It's easy to see how precisely encoding *all* of a text's dependencies at the time of generation would allow a model to form deep connections that would otherwise be impossible to see. If we are to develop machines that greatly exceed human reasoning abilities, teaching them to understand complex information dependencies seems natural and necessary. The fact remains that *you don't know what you don't know*, and it is easy to miss important connections that are not obvious within a few hops.
+It's easy to see how precisely encoding *all* of a text's dependencies at the time of generation would allow a model to form connections that would otherwise be impossible to spot. If we are to develop machines that greatly exceed human reasoning abilities, teaching them to understand complex information dependencies seems natural and necessary. The fact remains that *you don't know what you don't know*, and it is easy to miss important connections that are not obvious within a few hops.
 
-Moreover, most information dependencies are not structured in linear chains, but rather graphs. If you've ever asked a model to debug a deadlock in a complicated code base, you'll know that LLMs struggle to understand the delicate ordering of code and high branching factor of potential culprit code paths. Chain of thought reasoning through every suspicious path is intractable due to the exponential growth of tokens required.
+Moreover, information dependencies are often not structured in linear chains, but rather graphs. If you've ever asked a model to debug a deadlock in a complicated code base, you'll know that LLMs struggle to understand the delicate ordering of code and high branching factor of potential culprit code paths. Chain of thought reasoning through every suspicious path is intractable due to the exponential growth of tokens required.
 
 ## Follow Up Ideas
 I don't have access to a large distributed learning setup, but if I did, I'd start by adding a pretraining objective that requires a model to resolve a large number of dependencies per token. To avoid disrupting the natural abstraction of information, it might be worth warm-starting this circuit by freezing most heads and weight-sharing a head from the third layer and onwards to enforce a recursive divide and conquer mechanism. Another subtle detail is that the question must be provided before the context, otherwise the model would be unable to resolve the problem in parallel.
 
-An interesting follow-up direction is to explore the ability of small models to perform search through graph-like dependency relationships. My intuition is that . Moreover, it could also be helpful to figure out how to effectively weight-share .
+An interesting follow-up direction is to explore the ability of small models to perform search through graph-like dependency relationships. Moreover, it could also be helpful to figure out how to effectively weight-share the divide and conquer circuit, demonstrating truly infinite context depth.
 
 Thanks for reading! If you have any feedback or ideas, feel free to make an issue or PR on the [project repo](https://github.com/michael-lutz/divide-and-conquer). I have provided all model configurations & checkpoints and encourage you to perform your own analysis.
 
@@ -293,15 +291,39 @@ P.S. I'm always looking for collaborators to work on open-source projects. Reach
 
 ## Acknowledgements
 
-I'd like to thank Nathan Gong for the consistent feedback as I worked on this project. I'd also like to thank Michael Equi for graciously taking the time to review this blog.
+I'd like to thank Nathan Gong and Michael Equi for their consistent feedback on this project. I'd also like to thank the [Variable Scope](https://variablescope.org/) team for their work on the variable evaluation task, as it served as a major inspiration. The framework I built for this project, [iluvattnshun](https://github.com/michael-lutz/iluvattnshun), is heavily inspired by [xax](https://github.com/kscalelabs/xax/) and Ben Bolte's design patterns.
 
 ## Appendix
+
+### Theoretical Foundation
+
+This section provides a formal proof of why transformers can achieve exponential dependency resolution capacity with respect to layer depth.
+
+#### Exponential Capacity Theorem
+
+> **Theorem**: With $n$ attention layers, a transformer can resolve dependencies on the order of $2^{n-2}$ in a single forward pass if each dependency resolution does not require future information.
+>
+>**Base case** ($n = 2$): A 2-layer model can resolve 1-hop dependencies by directly attending to immediate predecessors.
+>
+>**Inductive step**: Assume an $n$-layer model can resolve dependencies up to depth $2^{n-3}$. An $(n+1)$-layer model can then:
+>1. Use the first $n$ layers to resolve dependencies up to depth $2^{n-3}$
+>2. Use the final layer to combine this information and resolve dependencies up to depth $2^{n-2}$
+>
+>This works because each token in layer $n+1$ can attend to all previous tokens, including those that have already resolved their dependencies in the first $n$ layers.
+>
+>**Formally**: If token $v$ has a dependency path of length $d \leq 2^{n-2}$ to some source $s$, then in layer $n+1$:
+>- $v$ has already resolved its dependencies up to depth $2^{n-3}$ by the inductive hypothesis
+>- $v$ can attend to a token $u$ that has already resolved its dependencies up to depth $2^{n-3}$
+>- The attention mechanism can combine the information from $v$ and $u$ to resolve the full path of depth up to $2^{n-2}$
+
+This proof establishes the theoretical foundation for exponential dependency resolution. The key insight is that as long as each dependency resolution does not require future information, it is possible to resolve dependencies in parallel. Each additional layer doubles the effective dependency depth by allowing tokens to combine information from multiple previously resolved paths, rather than just extending a single path linearly.
+
 
 ### Head Patching
 
 To understand the relative importance of each attention head, I performed head patching experiments where individual heads were replaced with their activations from a different prompt (seed 420) while keeping all other heads from the original prompt (seed 42). This technique reveals which heads are most critical for the model's performance on the variable evaluation task.
 
-The results show a clear pattern of head specialization across layers:
+The results show a an interesting pattern of head specialization across layers. The numbers in the table represent the accuracy achieved when that specific head is patched (replaced with activations from a different prompt), with lower values indicating the head is more critical for performance:
 
 | Layer | Head 0 | Head 1 | Most Important |
 |-------|--------|--------|----------------|
@@ -331,23 +353,3 @@ I thought it might be interesting to examine how token embeddings were structure
 
 We can see that numbesr 1-4 (only numbers in the dataset), `;`, and `>` have the highest magnitudes, leading to the lattice pattern observed in the first layer. Additionally, we can see that letters are somewhat close to each other (cosine similarity ~.3) in the embedded space.
 
-### Theoretical Foundation
-
-This section provides a formal proof of why transformers can achieve exponential dependency resolution capacity with respect to layer depth.
-
-#### Exponential Capacity Theorem
-
-> **Theorem**: With $n$ attention layers, a transformer can resolve dependencies on the order of $2^{n-2}$ in a single forward pass.
->
->**Base case** ($n = 2$): A 2-layer model can resolve 1-hop dependencies by directly attending to immediate predecessors.
->
->**Inductive step**: Assume an $n$-layer model can resolve dependencies up to depth $2^{n-3}$. An $(n+1)$-layer model can then:
->1. Use the first $n$ layers to resolve dependencies up to depth $2^{n-3}$
->2. Use the final layer to combine this information and resolve dependencies up to depth $2^{n-2}$
->
->This works because each token in layer $n+1$ can attend to all previous tokens, including those that have already resolved their dependencies in the first $n$ layers.
->
->**Formally**: If token $v$ has a dependency path of length $d \leq 2^{n-2}$ to some source $s$, then in layer $n+1$:
->- $v$ has already resolved its dependencies up to depth $2^{n-3}$ by the inductive hypothesis
->- $v$ can attend to a token $u$ that has already resolved its dependencies up to depth $2^{n-3}$
->- The attention mechanism can combine the information from $v$ and $u$ to resolve the full path of depth up to $2^{n-2}$
